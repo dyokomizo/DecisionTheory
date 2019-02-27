@@ -41,6 +41,8 @@ module EDT where
   probabilityElement (Probability a _) = a
   probabilityValue   (Probability _ r) = r
 
+  definitively a = [Probability a 1.0]
+
   data Guard = Guard String String
     deriving (Eq, Show)
 
@@ -90,9 +92,9 @@ module EDT where
                                        ,Clause [Guard "outcome" "2e"]    "1000"
                                        ]
 
-  edtChoiceForNewcomb = edt [] (Search read "action" "value") newcomb
+  edtChoiceForNewcomb = edt [] stdSearch newcomb
 
-  testEdtChoiceForNewcomb = test "EdtChoiceForNewcomb" ("onebox", 990000.0) $ edtChoiceForNewcomb
+  testEdtChoiceForNewcomb = test "EdtChoiceForNewcomb" (definitively ("onebox", 990000.0)) $ edtChoiceForNewcomb
 
   testNewcombChoices = test "NewcombChoices" ["onebox", "twobox"] $ choices "action" $ branches newcomb
 
@@ -109,15 +111,17 @@ module EDT where
           expectedValue (Probability g v) = ((* (fromRational v)) . uf) $ fromJust $ find o g
           expectation (v, ps) = (v, sum $ map expectedValue ps)
 
-  stableDT :: Foldable t => (Guard -> Endo [Probability (Graph Deterministic)]) -> t Guard -> Search -> Graph Stochastic -> (String, Utility)
-  stableDT hypothesis gs s@(Search _ a _) g | fst decision == fst dominance = decision
-                                            | otherwise                     = error ("OMG! " ++ (show dominance) ++ " /= " ++ (show decision))
-    where decision :: (String, Utility)
-          decision = dt hypothesis ((Guard a (fst dominance)): toList gs) s g
-          dominance :: (String, Utility)
-          dominance = dt hypothesis gs s g
+  stableDT :: Foldable t => (Guard -> Endo [Probability (Graph Deterministic)]) -> t Guard -> Search -> Graph Stochastic -> [Probability (String, Utility)]
+  stableDT hypothesis gs s@(Search _ a _) g  = ratification decisions
+    where decisions = map (\v -> dt hypothesis ((Guard a v) : toList gs) s g) $ choices a $ branches g
 
-  edt :: Foldable t => t Guard -> Search -> Graph Stochastic -> (String, Utility)
+  ratification :: [(String, Utility)] -> [Probability (String, Utility)]
+  ratification vs = map ratify vs
+    where totalUtility = sum $ map snd $ vs
+          ratify a@(v, u) = Probability a (ratified u)
+          ratified u = toRational (1 - u / totalUtility)
+
+  edt :: Foldable t => t Guard -> Search -> Graph Stochastic -> [Probability (String, Utility)]
   edt = stableDT condition
 
   find :: String -> Graph Deterministic -> Maybe String
@@ -270,9 +274,9 @@ module EDT where
                                        ,Clause [Guard "outcome" "1e"]       "0"
                                        ,Clause [Guard "outcome" "2e"]    "1000"
                                        ]
-  edtChoiceForCausalNewcomb = edt [] (Search read "action" "value") causalNewcomb
+  edtChoiceForCausalNewcomb = edt [] stdSearch causalNewcomb
 
-  testEdtChoiceForCausalNewcomb = test "EdtChoiceForCausalNewcomb" ("onebox", 990000.0) $ edtChoiceForCausalNewcomb
+  testEdtChoiceForCausalNewcomb = test "EdtChoiceForCausalNewcomb" (definitively ("onebox", 990000.0)) $ edtChoiceForCausalNewcomb
 
   testCausalNewcombChoices = test "CausalNewcombChoices" ["onebox", "twobox"] $ choices "action" $ branches newcomb
 
@@ -302,9 +306,9 @@ module EDT where
                                     ,Clause [Guard "infestation" "no termites", Guard "action" "refuse"] "-0"
                                     ]
 
-  edtChoiceForXorBlackmail = edt [Guard "observation" "letter"] (Search read "action" "value") xorBlackmail
+  edtChoiceForXorBlackmail = edt [Guard "observation" "letter"] stdSearch xorBlackmail
 
-  testEdtChoiceForXorBlackmail = test "EdtChoiceForXorBlackmail" ("pay", -1000.0) $ edtChoiceForXorBlackmail
+  testEdtChoiceForXorBlackmail = test "EdtChoiceForXorBlackmail" (definitively ("pay", -1000.0)) $ edtChoiceForXorBlackmail
 
   condition :: Guard -> Endo [Probability (Graph Deterministic)]
   condition (Guard l v) = normalize . filter branchSatisfiesGuard
@@ -347,11 +351,11 @@ module EDT where
                                     ,Clause [Guard "infestation" "no termites", Guard "action" "refuse"] "-0"
                                     ]
 
-  edtChoiceForCausalXorBlackmail = edt [Guard "observation" "letter"] (Search read "action" "value") causalXorBlackmail
+  edtChoiceForCausalXorBlackmail = edt [Guard "observation" "letter"] stdSearch causalXorBlackmail
 
-  testEdtChoiceForCausalXorBlackmail = test "EdtChoiceForCausalXorBlackmail" ("pay", -1000.0) edtChoiceForCausalXorBlackmail
+  testEdtChoiceForCausalXorBlackmail = test "EdtChoiceForCausalXorBlackmail" (definitively ("pay", -1000.0)) edtChoiceForCausalXorBlackmail
 
-  cdt :: [Guard] -> Search -> Graph Stochastic -> (String, Utility)
+  cdt :: [Guard] -> Search -> Graph Stochastic -> [Probability (String, Utility)]
   cdt = stableDT intervene
 
   intervene :: Guard -> Endo [Probability (Graph Deterministic)]
@@ -363,11 +367,11 @@ module EDT where
   mapBranches :: Endo (Labeled (Node a)) -> Endo (Probability (Graph a))
   mapBranches f (Probability (Graph lns) v) = Probability (Graph (map f lns)) v
 
-  cdtChoiceForCausalNewcomb = cdt [] (Search read "action" "value") causalNewcomb
-  testCdtChoiceForCausalNewcomb = test "CdtChoiceForCausalNewcomb" ("twobox", 11000.0) cdtChoiceForCausalNewcomb
+  cdtChoiceForCausalNewcomb = cdt [] stdSearch causalNewcomb
+  testCdtChoiceForCausalNewcomb = test "CdtChoiceForCausalNewcomb" (definitively ("twobox", 11000.0)) cdtChoiceForCausalNewcomb
 
-  cdtChoiceForCausalXorBlackmail = cdt [Guard "observation" "letter"] (Search read "action" "value") causalXorBlackmail
-  testCdtChoiceForCausalXorBlackmail = test "CausalXorBlackmail" ("refuse", -1000000.0) cdtChoiceForCausalXorBlackmail
+  cdtChoiceForCausalXorBlackmail = cdt [Guard "observation" "letter"] stdSearch causalXorBlackmail
+  testCdtChoiceForCausalXorBlackmail = test "CausalXorBlackmail" (definitively ("refuse", -1000000.0)) cdtChoiceForCausalXorBlackmail
 
 
   deathInDamascus = Graph [Labeled "predisposition" predisposition
@@ -398,11 +402,11 @@ module EDT where
 
   stdSearch = (Search read "action" "value")
 
-  edtChoiceForDeathInDamascus = edt [] (Search read "action" "value") deathInDamascus
-  testEdtChoiceForDeathInDamascus = test "EdtChoiceForDeathInDamascus" ("stay", 0.0) edtChoiceForDeathInDamascus
+  edtChoiceForDeathInDamascus = edt [] stdSearch deathInDamascus
+  testEdtChoiceForDeathInDamascus = test "EdtChoiceForDeathInDamascus" (definitively ("stay", 0.0)) edtChoiceForDeathInDamascus
 
-  cdtDominanceForDeathInDamascus = [dt intervene [Guard "action" "stay"] (Search read "action" "value") deathInDamascus
-                                   ,dt intervene [Guard "action" "flee"] (Search read "action" "value") deathInDamascus
+  cdtDominanceForDeathInDamascus = [dt intervene [Guard "action" "stay"] stdSearch deathInDamascus
+                                   ,dt intervene [Guard "action" "flee"] stdSearch deathInDamascus
                                    ]
 
   testCdtDominanceForDeathInDamascus = test "CdtDominanceForDeathInDamascus" [("flee",999.0),("stay",1000.0)] cdtDominanceForDeathInDamascus
