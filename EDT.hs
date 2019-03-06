@@ -3,11 +3,12 @@
 module EDT where
   import Data.List (groupBy, sortBy, sortOn, maximumBy, uncons, null)
   import Data.Maybe (catMaybes,fromJust)
-  import Data.Ord (comparing)
+  import Data.Ord (comparing, Down(..))
   import Data.Function (on)
   import qualified Data.Map.Strict as Map
   import Data.Ratio (Rational)
   import Data.Foldable (toList)
+  import Debug.Trace (traceShow, traceShowId)
 
   type Endo a = a -> a
 
@@ -54,6 +55,14 @@ module EDT where
 
   type Utility = Float
 
+  data Decision = Pure String Utility
+                | Mixed [Probability (String, Utility)]
+    deriving (Eq, Show)
+
+  decisions (Pure s _) = [s]
+  decisions (Mixed ps) = map (fst.probabilityElement) ps
+
+
   newcomb = Graph [Labeled "action"         action
                   ,Labeled "accuracy"       accuracy
                   ,Labeled "prediction"     prediction
@@ -90,16 +99,16 @@ module EDT where
                                        ,Clause [Guard "outcome" "2e"]    "1000"
                                        ]
 
-  edtChoiceForNewcomb = edt [] (Search read "action" "value") newcomb
+  edtChoiceForNewcomb = edt [] stdSearch newcomb
 
-  testEdtChoiceForNewcomb = test "EdtChoiceForNewcomb" ("onebox", 990000.0) $ edtChoiceForNewcomb
+  testEdtChoiceForNewcomb = test "EdtChoiceForNewcomb" (Pure "onebox" 990000.0) $ edtChoiceForNewcomb
 
   testNewcombChoices = test "NewcombChoices" ["onebox", "twobox"] $ choices "action" $ branches newcomb
 
   data Search = Search (String -> Utility) String String
 
-  dt :: Foldable t => (Guard -> Endo [Probability (Graph Deterministic)]) -> t Guard -> Search -> Graph Stochastic -> (String, Utility)
-  dt hypothesis gs (Search uf a o) g = maximumBy (comparing snd) $ map expectation $ hypotheticals
+  dt :: Foldable t => (Guard -> Endo [Probability (Graph Deterministic)]) -> t Guard -> Search -> Graph Stochastic -> Decision
+  dt hypothesis gs (Search uf a o) g = uncurry Pure $ maximumBy (comparing snd) $ map expectation $ hypotheticals
     where hypotheticals :: [(String, [Probability (Graph Deterministic)])]
           hypotheticals = catMaybes $ map (hypothetical.conclusion) $ choices a $ branches g
           hypothetical (v, []) = Nothing
@@ -109,15 +118,13 @@ module EDT where
           expectedValue (Probability g v) = ((* (fromRational v)) . uf) $ fromJust $ find o g
           expectation (v, ps) = (v, sum $ map expectedValue ps)
 
-  stableDT :: Foldable t => (Guard -> Endo [Probability (Graph Deterministic)]) -> t Guard -> Search -> Graph Stochastic -> (String, Utility)
-  stableDT hypothesis gs s@(Search _ a _) g | fst decision == fst dominance = decision
-                                            | otherwise                     = error ("OMG! " ++ (show dominance) ++ " /= " ++ (show decision))
-    where decision :: (String, Utility)
-          decision = dt hypothesis ((Guard a (fst dominance)): toList gs) s g
-          dominance :: (String, Utility)
+  stableDT :: Foldable t => (Guard -> Endo [Probability (Graph Deterministic)]) -> t Guard -> Search -> Graph Stochastic -> Decision
+  stableDT hypothesis gs s@(Search _ a _) g | (head $ decisions $ decision) == (head $ decisions $ dominance) = decision
+                                            | otherwise             = error ("OMG! " ++ (show dominance) ++ " /= " ++ (show decision))
+    where decision  = dt hypothesis ((Guard a $ head $ decisions $ dominance): toList gs) s g
           dominance = dt hypothesis gs s g
 
-  edt :: Foldable t => t Guard -> Search -> Graph Stochastic -> (String, Utility)
+  edt :: Foldable t => t Guard -> Search -> Graph Stochastic -> Decision
   edt = stableDT condition
 
   find :: String -> Graph Deterministic -> Maybe String
@@ -270,9 +277,9 @@ module EDT where
                                        ,Clause [Guard "outcome" "1e"]       "0"
                                        ,Clause [Guard "outcome" "2e"]    "1000"
                                        ]
-  edtChoiceForCausalNewcomb = edt [] (Search read "action" "value") causalNewcomb
+  edtChoiceForCausalNewcomb = edt [] stdSearch causalNewcomb
 
-  testEdtChoiceForCausalNewcomb = test "EdtChoiceForCausalNewcomb" ("onebox", 990000.0) $ edtChoiceForCausalNewcomb
+  testEdtChoiceForCausalNewcomb = test "EdtChoiceForCausalNewcomb" (Pure "onebox" 990000.0) $ edtChoiceForCausalNewcomb
 
   testCausalNewcombChoices = test "CausalNewcombChoices" ["onebox", "twobox"] $ choices "action" $ branches newcomb
 
@@ -302,9 +309,9 @@ module EDT where
                                     ,Clause [Guard "infestation" "no termites", Guard "action" "refuse"] "-0"
                                     ]
 
-  edtChoiceForXorBlackmail = edt [Guard "observation" "letter"] (Search read "action" "value") xorBlackmail
+  edtChoiceForXorBlackmail = edt [Guard "observation" "letter"] stdSearch xorBlackmail
 
-  testEdtChoiceForXorBlackmail = test "EdtChoiceForXorBlackmail" ("pay", -1000.0) $ edtChoiceForXorBlackmail
+  testEdtChoiceForXorBlackmail = test "EdtChoiceForXorBlackmail" (Pure "pay" (-1000.0)) $ edtChoiceForXorBlackmail
 
   condition :: Guard -> Endo [Probability (Graph Deterministic)]
   condition (Guard l v) = normalize . filter branchSatisfiesGuard
@@ -347,11 +354,11 @@ module EDT where
                                     ,Clause [Guard "infestation" "no termites", Guard "action" "refuse"] "-0"
                                     ]
 
-  edtChoiceForCausalXorBlackmail = edt [Guard "observation" "letter"] (Search read "action" "value") causalXorBlackmail
+  edtChoiceForCausalXorBlackmail = edt [Guard "observation" "letter"] stdSearch causalXorBlackmail
 
-  testEdtChoiceForCausalXorBlackmail = test "EdtChoiceForCausalXorBlackmail" ("pay", -1000.0) edtChoiceForCausalXorBlackmail
+  testEdtChoiceForCausalXorBlackmail = test "EdtChoiceForCausalXorBlackmail" (Pure "pay" (-1000.0)) edtChoiceForCausalXorBlackmail
 
-  cdt :: [Guard] -> Search -> Graph Stochastic -> (String, Utility)
+  cdt :: [Guard] -> Search -> Graph Stochastic -> Decision
   cdt = stableDT intervene
 
   intervene :: Guard -> Endo [Probability (Graph Deterministic)]
@@ -363,11 +370,11 @@ module EDT where
   mapBranches :: Endo (Labeled (Node a)) -> Endo (Probability (Graph a))
   mapBranches f (Probability (Graph lns) v) = Probability (Graph (map f lns)) v
 
-  cdtChoiceForCausalNewcomb = cdt [] (Search read "action" "value") causalNewcomb
-  testCdtChoiceForCausalNewcomb = test "CdtChoiceForCausalNewcomb" ("twobox", 11000.0) cdtChoiceForCausalNewcomb
+  cdtChoiceForCausalNewcomb = cdt [] stdSearch causalNewcomb
+  testCdtChoiceForCausalNewcomb = test "CdtChoiceForCausalNewcomb" (Pure "twobox" 11000.0) cdtChoiceForCausalNewcomb
 
-  cdtChoiceForCausalXorBlackmail = cdt [Guard "observation" "letter"] (Search read "action" "value") causalXorBlackmail
-  testCdtChoiceForCausalXorBlackmail = test "CausalXorBlackmail" ("refuse", -1000000.0) cdtChoiceForCausalXorBlackmail
+  cdtChoiceForCausalXorBlackmail = cdt [Guard "observation" "letter"] stdSearch causalXorBlackmail
+  testCdtChoiceForCausalXorBlackmail = test "CausalXorBlackmail" (Pure "refuse" (-1000000.0)) cdtChoiceForCausalXorBlackmail
 
 
   deathInDamascus = Graph [Labeled "predisposition" predisposition
@@ -379,12 +386,12 @@ module EDT where
     where predisposition = Distribution [Probability "fleer"  0.5
                                         ,Probability "stayer" 0.5
                                         ]
-          action      = Conditional [Clause [Guard "predisposition" "fleer"]  "flee"
-                                    ,Clause [Guard "predisposition" "stayer"] "stay"
-                                    ]
-          death       = Conditional [Clause [Guard "predisposition" "fleer"]  "aleppo"
-                                    ,Clause [Guard "predisposition" "stayer"] "damascus"
-                                    ]
+          action         = Conditional [Clause [Guard "predisposition" "fleer"]  "flee"
+                                       ,Clause [Guard "predisposition" "stayer"] "stay"
+                                       ]
+          death          = Conditional [Clause [Guard "predisposition" "fleer"]  "aleppo"
+                                       ,Clause [Guard "predisposition" "stayer"] "damascus"
+                                       ]
           outcome        = Conditional [Clause [Guard "action" "stay", Guard "death" "damascus"] "stay and die"
                                        ,Clause [Guard "action" "stay", Guard "death" "aleppo"  ] "stay and live"
                                        ,Clause [Guard "action" "flee", Guard "death" "damascus"] "flee and live"
@@ -398,14 +405,102 @@ module EDT where
 
   stdSearch = (Search read "action" "value")
 
-  edtChoiceForDeathInDamascus = edt [] (Search read "action" "value") deathInDamascus
-  testEdtChoiceForDeathInDamascus = test "EdtChoiceForDeathInDamascus" ("stay", 0.0) edtChoiceForDeathInDamascus
+  edtChoiceForDeathInDamascus = edt [] stdSearch deathInDamascus
+  testEdtChoiceForDeathInDamascus = test "EdtChoiceForDeathInDamascus" (Pure "stay" 0.0) edtChoiceForDeathInDamascus
 
-  cdtDominanceForDeathInDamascus = [dt intervene [Guard "action" "stay"] (Search read "action" "value") deathInDamascus
-                                   ,dt intervene [Guard "action" "flee"] (Search read "action" "value") deathInDamascus
+  cdtDominanceForDeathInDamascus = [dt intervene [Guard "action" "stay"] stdSearch deathInDamascus
+                                   ,dt intervene [Guard "action" "flee"] stdSearch deathInDamascus
                                    ]
 
-  testCdtDominanceForDeathInDamascus = test "CdtDominanceForDeathInDamascus" [("flee",999.0),("stay",1000.0)] cdtDominanceForDeathInDamascus
+  testCdtDominanceForDeathInDamascus = test "CdtDominanceForDeathInDamascus" [Pure "flee" 999.0, Pure "stay" 1000.0] cdtDominanceForDeathInDamascus
+
+  deathInDamascusWithSimulation = Graph [Labeled "predisposition" predisposition
+                                        ,Labeled "action"         action
+                                        ,Labeled "death"          death
+                                        ,Labeled "accuracy"       accuracy
+                                        ,Labeled "simulation"     simulation
+                                        ,Labeled "outcome"        outcome
+                                        ,Labeled "value"          value
+                                        ]
+    where predisposition = Distribution [Probability "fleer"  0.5
+                                        ,Probability "stayer" 0.5
+                                        ]
+          action         = Conditional [Clause [Guard "predisposition" "fleer"]  "flee"
+                                       ,Clause [Guard "predisposition" "stayer"] "stay"
+                                       ]
+          death          = Conditional [Clause [Guard "predisposition" "fleer"]  "aleppo"
+                                       ,Clause [Guard "predisposition" "stayer"] "damascus"
+                                       ]
+          accuracy       = Distribution [Probability "high" 0.4995
+                                        ,Probability "low"  0.5005
+                                        ]
+          simulation     = Conditional [Clause [Guard "predisposition" "fleer",  Guard "accuracy" "high"] "flee"
+                                       ,Clause [Guard "predisposition" "fleer",  Guard "accuracy" "low"]  "stay"
+                                       ,Clause [Guard "predisposition" "stayer", Guard "accuracy" "high"] "stay"
+                                       ,Clause [Guard "predisposition" "stayer", Guard "accuracy" "low"]  "flee"
+                                       ]
+          outcome        = Conditional [Clause [Guard "action" "stay", Guard "death" "damascus"] "stay and die"
+                                       ,Clause [Guard "action" "stay", Guard "death" "aleppo"  ] "stay and live"
+                                       ,Clause [Guard "action" "flee", Guard "death" "damascus"] "flee and live"
+                                       ,Clause [Guard "action" "flee", Guard "death" "aleppo"  ] "flee and die"
+                                       ]
+          value          = Conditional [Clause [Guard "outcome" "stay and die" ]    "0"
+                                       ,Clause [Guard "outcome" "stay and live"] "1000"
+                                       ,Clause [Guard "outcome" "flee and live"]  "999"
+                                       ,Clause [Guard "outcome" "flee and die" ]   "-1"
+                                       ]
+
+  mapG :: Endo (Labeled (Node a)) -> Endo (Graph a)
+  mapG f (Graph lns) = Graph (map f lns)
+
+  onLabel :: String -> Endo a -> Endo (Labeled a)
+  onLabel s f l@(Labeled l' v) | s == l'    = Labeled l' (f v)
+                               | otherwise  = l
+
+  simulate n hypothesis gs s g = steps
+    where cs = choices n $ branches g
+          steps = step' $ step' $ step' $ step' $ step' $ step' $ step' $ step' $ step' (head $ decisions $ dt intervene gs s g, g)
+          step' = traceShowId . step n hypothesis gs s
+
+  step n hypothesis gs s (a, g) = (a', g')
+    where a' = fst $ head $ traceShowId $ dts intervene (Guard n a : toList gs) s g
+          g' = mapG (onLabel "accuracy" $ mapAccuracy $ if a == a' then higher 0.1 else lower  0.1) g
+          mapAccuracy :: Endo (Rational,Rational) -> Endo (Node Stochastic)
+          mapAccuracy f (Distribution [Probability _ high, Probability _ low]) = Distribution [Probability "high" $ fst $ f (high,low), Probability "low" $ snd $ f (high,low)]
+
+  dts :: Foldable t => (Guard -> Endo [Probability (Graph Deterministic)]) -> t Guard -> Search -> Graph Stochastic -> [(String, Utility)]
+  dts hypothesis gs (Search uf a o) g = sortBy (comparing (Down . snd)) $ map expectation $ hypotheticals
+    where hypotheticals :: [(String, [Probability (Graph Deterministic)])]
+          hypotheticals = catMaybes $ map (hypothetical.conclusion) $ choices a $ branches g
+          hypothetical (v, []) = Nothing
+          hypothetical c       = Just c
+          conclusion v = (v, hypothesis (Guard a v) possibleBranches)
+          possibleBranches = foldl (flip condition) (branches g) gs
+          expectedValue (Probability g v) = ((* (fromRational v)) . uf) $ fromJust $ find o g
+          expectation (v, ps) = (v, sum $ map expectedValue ps)
+
+
+  higher d (h,_) = (h',l')
+    where h' = (1-h)*d+h
+          l' = 1-h'
+  lower d (_,l) = (h',l')
+    where l' = (1-l)*d+l
+          h' = 1-l'
+
+  ratification :: [(String, Utility)] -> [Probability (String, Utility)]
+  ratification vs = map ratify vs
+    where totalUtility = sum $ map snd $ vs
+          ratify a@(v, u) = Probability a (ratified u)
+          ratified u = toRational (1 - u / totalUtility)
+
+  ratified :: [(String, Utility)] -> [(String, Utility)]
+  ratified =  map ratify . ratification
+    where ratify (Probability (s,u) p) = (s, u * fromRational p)
+
+  rdt :: Foldable t => (Guard -> Endo [Probability (Graph Deterministic)]) -> t Guard -> Search -> Graph Stochastic -> Decision
+  rdt hypothesis gs s g = case (dt hypothesis gs s g) of
+                            p@(Pure _) -> p
+                            Mixed ps   -> Mixded $ ratified $ map probabilityElement ps
 
   tests = (testEdtChoiceForNewcomb
           ,testNewcombChoices
